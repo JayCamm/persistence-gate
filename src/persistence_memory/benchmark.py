@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from .controller import GateReport, MemoryController
 from .labeling import label_memory
 from .models import MemoryItem, TaskContext
+from .profiles import GateProfile
 from .retriever import rank_by_relevance
+from .scorer import PersistenceScorer
 from .store import InMemoryStore
 
 
@@ -85,17 +87,22 @@ def compute_metrics(items: list[MemoryItem]) -> StrategyMetrics:
     )
 
 
-def evaluate_gate_vs_topk(items: list[MemoryItem], task: TaskContext, top_k: int = 8) -> BenchmarkResult:
+def evaluate_gate_vs_topk(
+    items: list[MemoryItem],
+    task: TaskContext,
+    top_k: int = 8,
+    profile: str | GateProfile = "balanced",
+) -> BenchmarkResult:
     """Compare ordinary relevance-only top-k against Persistence Gate.
 
     Relevance is computed from the task query for every item. Ordinary top-k uses
     only that relevance. Persistence Gate sees the same relevance scores but also
-    uses risk, harm, usefulness, burden, context, and state.
+    uses risk, harm, usefulness, burden, context, state, and the selected profile.
     """
     ranked = rank_by_relevance(task.query, items, copy_items=True)
     ordinary_items = ranked[:top_k]
 
-    controller = MemoryController(InMemoryStore(ranked))
+    controller = MemoryController(InMemoryStore(ranked), scorer=PersistenceScorer(profile=profile))
     report = controller.retrieve_report(task, top_k=top_k)
     gated_items = [scored.memory for scored in report.allowed]
 
