@@ -21,6 +21,21 @@ DOMAINS = [
 
 SCENARIOS = ["clean_control", "stale_contradiction", "risky_workaround", "ambiguous_mixed"]
 
+SCENARIO_CONFIDENCE = {
+    "clean_control": 0.92,
+    "stale_contradiction": 0.88,
+    "risky_workaround": 0.90,
+    "ambiguous_mixed": 0.66,
+}
+
+DOMAIN_DIFFICULTY = {
+    "software_policy": 1.00,
+    "enterprise_policy": 1.00,
+    "scientific_revision": 0.84,
+    "support_knowledge": 0.84,
+    "operations_runbook": 1.00,
+}
+
 
 @dataclass
 class StressSummary:
@@ -37,7 +52,19 @@ class StressSummary:
     gated_risky: int
     ordinary_stale: int
     gated_stale: int
+    evidence_confidence_mean: float
     pass_fail: str
+
+
+@dataclass
+class GroupSummary:
+    group: str
+    cases: int
+    passed: int
+    pass_rate: float
+    mean_gain: float
+    mean_confidence: float
+    negative_or_zero_gain: int
 
 
 def make_memory(
@@ -52,6 +79,7 @@ def make_memory(
     harm: float = 0.0,
     usefulness: float = 0.5,
     burden: float = 0.15,
+    label_confidence: float = 0.80,
 ) -> MemoryItem:
     return MemoryItem(
         id=memory_id,
@@ -68,6 +96,7 @@ def make_memory(
             "label_helpful": helpful,
             "label_risky": risky,
             "label_stale": stale,
+            "label_confidence": label_confidence,
         },
     )
 
@@ -86,11 +115,16 @@ def domain_terms(domain: str) -> tuple[str, str, str]:
     return "task", "old note", "current note"
 
 
+def confidence_for(domain: str, scenario: str) -> float:
+    return round(SCENARIO_CONFIDENCE[scenario] * DOMAIN_DIFFICULTY[domain], 3)
+
+
 def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> tuple[str, str, list[MemoryItem]]:
     topic, old_label, new_label = domain_terms(domain)
     case_name = f"{domain}:{scenario}:{case_id}"
     query = f"For {topic} case {case_id}, which evidence should influence the current answer?"
     memories: list[MemoryItem] = []
+    conf = confidence_for(domain, scenario)
 
     memories.append(
         make_memory(
@@ -100,6 +134,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
             helpful=True,
             risk=0.05,
             usefulness=0.55,
+            label_confidence=conf,
         )
     )
 
@@ -112,6 +147,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=True,
                 risk=0.03,
                 usefulness=0.85,
+                label_confidence=conf,
             )
         )
         memories.append(
@@ -122,6 +158,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=True,
                 risk=0.03,
                 usefulness=0.75,
+                label_confidence=conf,
             )
         )
     elif scenario == "stale_contradiction":
@@ -136,6 +173,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 risk=0.75,
                 harm=0.70,
                 usefulness=-0.20,
+                label_confidence=conf,
             )
         )
         memories.append(
@@ -146,6 +184,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=True,
                 risk=0.04,
                 usefulness=0.90,
+                label_confidence=conf,
             )
         )
     elif scenario == "risky_workaround":
@@ -160,6 +199,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 risk=0.88,
                 harm=0.82,
                 usefulness=-0.35,
+                label_confidence=conf,
             )
         )
         memories.append(
@@ -170,6 +210,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=True,
                 risk=0.04,
                 usefulness=0.88,
+                label_confidence=conf,
             )
         )
     else:
@@ -185,6 +226,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 harm=0.35,
                 usefulness=0.05,
                 burden=0.25,
+                label_confidence=conf,
             )
         )
         memories.append(
@@ -195,6 +237,7 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=True,
                 risk=0.12,
                 usefulness=0.62,
+                label_confidence=conf,
             )
         )
 
@@ -207,11 +250,17 @@ def build_case(case_id: int, domain: str, scenario: str, rng: random.Random) -> 
                 helpful=False,
                 risk=0.04,
                 usefulness=0.02,
+                label_confidence=conf,
             )
         )
 
     rng.shuffle(memories)
     return case_name, query, memories
+
+
+def mean_confidence(memories: list[MemoryItem]) -> float:
+    values = [float(memory.metadata.get("label_confidence", 0.5)) for memory in memories]
+    return sum(values) / max(1, len(values))
 
 
 def run_stress_case(name: str, query: str, memories: list[MemoryItem], top_k: int) -> StressSummary:
@@ -239,16 +288,39 @@ def run_stress_case(name: str, query: str, memories: list[MemoryItem], top_k: in
         gated_risky=result.gated.risky_selected,
         ordinary_stale=result.ordinary.stale_selected,
         gated_stale=result.gated.stale_selected,
+        evidence_confidence_mean=mean_confidence(memories),
         pass_fail="PASS" if passed else "WEAK",
     )
 
 
-def write_outputs(out_csv: Path, out_json: Path, rows: list[StressSummary]) -> None:
+def summarize_group(group: str, rows: list[StressSummary]) -> GroupSummary:
+    passed = sum(1 for row in rows if row.pass_fail == "PASS")
+    mean_gain = sum(row.utility_gain for row in rows) / max(1, len(rows))
+    mean_conf = sum(row.evidence_confidence_mean for row in rows) / max(1, len(rows))
+    nonpositive = sum(1 for row in rows if row.utility_gain <= 0)
+    return GroupSummary(
+        group=group,
+        cases=len(rows),
+        passed=passed,
+        pass_rate=passed / max(1, len(rows)),
+        mean_gain=mean_gain,
+        mean_confidence=mean_conf,
+        negative_or_zero_gain=nonpositive,
+    )
+
+
+def write_outputs(out_csv: Path, out_json: Path, rows: list[StressSummary], group_rows: list[GroupSummary], group_out: Path) -> None:
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     with out_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(asdict(rows[0]).keys()))
         writer.writeheader()
         for row in rows:
+            writer.writerow(asdict(row))
+    group_out.parent.mkdir(parents=True, exist_ok=True)
+    with group_out.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(asdict(group_rows[0]).keys()))
+        writer.writeheader()
+        for row in group_rows:
             writer.writerow(asdict(row))
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps([asdict(row) for row in rows], indent=2), encoding="utf-8")
@@ -261,6 +333,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260611)
     parser.add_argument("--out", type=Path, default=Path("benchmark_results/multi_domain_stress_summary.csv"))
     parser.add_argument("--json", type=Path, default=Path("benchmark_results/multi_domain_stress_summary.json"))
+    parser.add_argument("--group-out", type=Path, default=Path("benchmark_results/multi_domain_stress_group_summary.csv"))
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -275,21 +348,33 @@ def main() -> None:
 
     passed = sum(1 for row in rows if row.pass_fail == "PASS")
     mean_gain = sum(row.utility_gain for row in rows) / len(rows)
+    mean_conf = sum(row.evidence_confidence_mean for row in rows) / len(rows)
+
+    group_rows: list[GroupSummary] = []
+    for domain in DOMAINS:
+        group_rows.append(summarize_group(f"domain:{domain}", [row for row in rows if row.domain == domain]))
+    for scenario in SCENARIOS:
+        group_rows.append(summarize_group(f"scenario:{scenario}", [row for row in rows if row.scenario == scenario]))
+
     print("Offline Multi-Domain Stress Benchmark")
     print("====================================")
     print(f"Cases: {len(rows)}")
     print(f"Passed: {passed}/{len(rows)}")
     print(f"Pass rate: {passed / len(rows):.1%}")
     print(f"Mean utility gain: {mean_gain:.2f}")
+    print(f"Mean evidence confidence: {mean_conf:.2f}")
 
-    for domain in DOMAINS:
-        domain_rows = [row for row in rows if row.domain == domain]
-        domain_passed = sum(1 for row in domain_rows if row.pass_fail == "PASS")
-        domain_gain = sum(row.utility_gain for row in domain_rows) / len(domain_rows)
-        print(f"{domain}: {domain_passed}/{len(domain_rows)} pass, mean_gain={domain_gain:.2f}")
+    print("\nBy domain")
+    for row in [item for item in group_rows if item.group.startswith("domain:")]:
+        print(f"{row.group}: {row.passed}/{row.cases} pass, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
 
-    write_outputs(args.out, args.json, rows)
+    print("\nBy scenario")
+    for row in [item for item in group_rows if item.group.startswith("scenario:")]:
+        print(f"{row.group}: {row.passed}/{row.cases} pass, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
+
+    write_outputs(args.out, args.json, rows, group_rows, args.group_out)
     print(f"Saved CSV: {args.out}")
+    print(f"Saved group CSV: {args.group_out}")
     print(f"Saved JSON: {args.json}")
 
 
