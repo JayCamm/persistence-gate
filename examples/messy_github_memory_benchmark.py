@@ -15,6 +15,7 @@ from time import time
 
 from persistence_memory import MemoryItem, TaskContext
 from persistence_memory.benchmark import evaluate_gate_vs_topk, item_is_risky, item_is_stale
+from persistence_memory.labeling import label_memory
 
 DEFAULT_REPOS = [
     "JayCamm/persistence-gate",
@@ -38,20 +39,15 @@ RISK_TERMS = [
     "deprecated",
     "obsolete",
     "stale",
-    "old",
-    "legacy",
-    "failed",
-    "failure",
-    "error",
-    "bug",
-    "broken",
-    "todo",
-    "fixme",
-    "not production",
-    "prototype",
-    "experimental",
-    "do not",
-    "warning",
+    "outdated",
+    "old claim",
+    "failed approach",
+    "broken assumption",
+    "incorrect",
+    "contradicted",
+    "do not use",
+    "always retrieve top-k",
+    "use immediately",
 ]
 
 HELPFUL_TERMS = [
@@ -71,13 +67,14 @@ HELPFUL_TERMS = [
 ]
 
 STALE_TERMS = [
-    "old",
     "deprecated",
     "obsolete",
     "legacy",
     "stale",
     "outdated",
-    "previous",
+    "previous conclusion",
+    "superseded",
+    "contradicted",
 ]
 
 
@@ -148,13 +145,7 @@ def chunk_text(text: str, max_chars: int = 1100) -> list[str]:
     clean = re.sub(r"\s+", " ", text).strip()
     if not clean:
         return []
-    chunks: list[str] = []
-    start = 0
-    while start < len(clean):
-        chunk = clean[start : start + max_chars]
-        chunks.append(chunk)
-        start += max_chars
-    return chunks
+    return [clean[start : start + max_chars] for start in range(0, len(clean), max_chars)]
 
 
 def get_repo_tree(repo: str, branch: str) -> list[dict]:
@@ -177,6 +168,23 @@ def get_commits(repo: str, limit: int = 25) -> list[dict]:
     return payload if isinstance(payload, list) else []
 
 
+def risk_for_kind(kind: str, text: str, date_value: str | None) -> float:
+    risk_hits = count_terms(text, RISK_TERMS)
+    stale_hits = count_terms(text, STALE_TERMS)
+    base = age_risk(date_value)
+    if kind in {"source", "test"}:
+        return clamp(base * 0.35 + 0.05 * risk_hits)
+    if kind == "commit":
+        return clamp(base + 0.06 * risk_hits)
+    return clamp(base + 0.16 * risk_hits + (0.10 if stale_hits else 0.0))
+
+
+def helpfulness_for_kind(kind: str, text: str) -> float:
+    helpful_hits = count_terms(text, HELPFUL_TERMS)
+    bonus = 0.18 if kind in {"readme", "test"} else 0.10 if kind == "source" else 0.0
+    return clamp(0.10 + 0.12 * helpful_hits + bonus)
+
+
 def make_memory(
     *,
     memory_id: str,
@@ -187,18 +195,10 @@ def make_memory(
     date_value: str | None = None,
     context_scope: str = "project",
 ) -> MemoryItem:
-    risk_hits = count_terms(text, RISK_TERMS)
-    helpful_hits = count_terms(text, HELPFUL_TERMS)
-    stale_hits = count_terms(text, STALE_TERMS)
     bucket = age_bucket(date_value)
-
-    risk = clamp(age_risk(date_value) + 0.13 * risk_hits + (0.12 if stale_hits else 0.0))
-    helpfulness = clamp(0.10 + 0.13 * helpful_hits + (0.12 if kind in {"readme", "test", "source"} else 0.0))
+    risk = risk_for_kind(kind, text, date_value)
+    helpfulness = helpfulness_for_kind(kind, text)
     burden = clamp(len(text) / 2400)
-
-    label_risky = risk >= 0.45 or risk_hits >= 2
-    label_stale = bucket == "old" or stale_hits >= 1 or kind == "old_commit"
-    label_helpful = helpfulness >= 0.45 and not label_risky
 
     return MemoryItem(
         id=memory_id,
@@ -206,7 +206,7 @@ def make_memory(
         source=f"github:{repo}:{path or kind}",
         context_scope=context_scope,
         created_at=time(),
-        confidence=0.65 if kind in {"readme", "source", "test"} else 0.50,
+        confidence=0.70 if kind in {"readme", "source", "test"} else 0.50,
         importance=clamp(0.45 + helpfulness * 0.35),
         burden=burden,
         risk=risk,
@@ -218,9 +218,6 @@ def make_memory(
             "path": path,
             "date": date_value,
             "age_bucket": bucket,
-            "label_risky": label_risky,
-            "label_stale": label_stale,
-            "label_helpful": label_helpful,
         },
     )
 
@@ -235,8 +232,7 @@ def build_repo_memories(repo: str, max_files: int, max_commits: int) -> list[Mem
     memories: list[MemoryItem] = []
     repo_text = (
         f"Repository {repo_payload.get('full_name')}. Description: {repo_payload.get('description') or 'No description provided.'}. "
-        f"Language: {repo_payload.get('language') or 'unknown'}. Last pushed: {pushed_at}. "
-        f"Default branch: {branch}."
+        f"Language: {repo_payload.get('language') or 'unknown'}. Last pushed: {pushed_at}. Default branch: {branch}."
     )
     memories.append(make_memory(memory_id=f"{repo}::repo_meta".replace("/", "__"), text=repo_text, repo=repo, kind="repo_meta", date_value=pushed_at))
 
@@ -253,7 +249,7 @@ def build_repo_memories(repo: str, max_files: int, max_commits: int) -> list[Mem
         text = get_file_text(repo, path, branch)
         if not text.strip():
             continue
-        kind = "test" if path.startswith("tests/") or "/test" in path else "readme" if "readme" in path.lower() else "source" if path.endswith(".py") else "document"
+        kind = "test" if path.startswith("tests/") or "/test" in path else "readme" if "readme" in path.lower() else "source" if path.endswith(".py") else "sample" if path.endswith(".jsonl") else "document"
         for index, chunk in enumerate(chunk_text(text)):
             memory_id = f"{repo}::{path}::chunk{index}".replace("/", "__")
             decorated = f"File {path} from {repo}. {chunk}"
@@ -275,7 +271,7 @@ def build_repo_memories(repo: str, max_files: int, max_commits: int) -> list[Mem
 def print_metrics(name: str, metrics) -> None:
     print(
         f"{name}: selected={metrics.selected}, helpful={metrics.helpful_selected}, risky={metrics.risky_selected}, "
-        f"stale={metrics.stale_selected}, burden={metrics.burden:.2f}, net={metrics.net_utility():.2f}"
+        f"stale={metrics.stale_selected}, uncertain={metrics.uncertain_selected}, burden={metrics.burden:.2f}, net={metrics.net_utility():.2f}"
     )
 
 
@@ -288,20 +284,22 @@ def print_items(title: str, items) -> None:
     for item in items:
         memory = item.memory if hasattr(item, "memory") else item
         score = f", score={item.score:.3f}, decision={item.decision.value}, reasons={item.reasons}" if hasattr(item, "score") else ""
+        labels = label_memory(memory)
         flags = []
-        if item_is_risky(memory):
+        if labels.risky:
             flags.append("risky")
-        if item_is_stale(memory):
+        if labels.stale:
             flags.append("stale")
-        if memory.metadata.get("label_helpful"):
+        if labels.helpful:
             flags.append("helpful")
-        flag_text = f" flags={flags}" if flags else ""
-        print(f"- {memory.id}{score}{flag_text}")
+        if labels.uncertain:
+            flags.append("uncertain")
+        print(f"- {memory.id}{score} flags={flags} label_reasons={list(labels.reasons)}")
         print(f"  {memory.text[:260]}...")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Full messy GitHub memory benchmark for Persistence Gate.")
+    parser = argparse.ArgumentParser(description="Bias-audited messy GitHub memory benchmark for Persistence Gate.")
     parser.add_argument("--repos", nargs="*", default=DEFAULT_REPOS)
     parser.add_argument("--query", default="What current evidence and code should influence the next development step for Persistence Gate?")
     parser.add_argument("--top-k", type=int, default=10)
@@ -310,8 +308,8 @@ def main() -> None:
     parser.add_argument("--save-corpus", type=Path, default=None)
     args = parser.parse_args()
 
-    print("Building messy file-level GitHub memory corpus")
-    print("================================================")
+    print("Building bias-audited messy file-level GitHub memory corpus")
+    print("===========================================================")
     corpus: list[MemoryItem] = []
     for repo in args.repos:
         print(f"Fetching repo/files/commits for {repo}...")
@@ -339,20 +337,21 @@ def main() -> None:
     print(f"Utility gain: {result.utility_gain:.2f}")
     print(f"Risky items prevented: {result.risky_items_prevented}")
     print(f"Stale items prevented: {result.stale_items_prevented}")
+    print(f"Helpful items lost: {result.helpful_items_lost}")
 
     print_items("Ordinary top-k selected", result.report.ordinary_top_k)
     print_items("Persistence Gate allowed", result.report.allowed)
-    print_items("Persistence Gate blocked", result.report.blocked)
-    print_items("Allowed but not selected due to top-k budget", result.report.not_selected or [])
+    print_items("Persistence Gate blocked", result.report.blocked[:30])
+    print_items("Allowed but not selected due to top-k budget", (result.report.not_selected or [])[:20])
 
     print("\nInterpretation")
     print("==============")
     if result.utility_gain > 0 and result.risky_items_prevented > 0:
-        print("Persistence Gate improved net utility and prevented risky/stale influence in this messy corpus.")
+        print("Persistence Gate improved net utility and prevented risky/stale influence under bias-aware labels.")
     elif result.utility_gain > 0:
         print("Persistence Gate improved net utility, mostly by reshaping the context budget rather than hard-blocking risk.")
     else:
-        print("Persistence Gate did not beat ordinary top-k under this scoring setup. This is useful: it means we need better risk labels, better scoring, or a messier corpus.")
+        print("Persistence Gate did not beat ordinary top-k under this stricter scoring setup. That is useful pressure for improving the gate.")
 
 
 if __name__ == "__main__":
