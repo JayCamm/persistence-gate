@@ -32,20 +32,26 @@ Research prototype. Not production software yet.
 
 Supported claim so far: matched synthetic simulations show persistence-aware v2 beats ordinary retrieval on net utility by reducing harmful retrievals and burden while maintaining useful retrieval. The remaining design problem is abstention-aware retrieval: deciding when memory should not be used at all.
 
-## What the demo shows
+## What the demos show
 
-The demo compares:
+### Sample demo
+
+Compares:
 
 1. **Ordinary top-k retrieval**: use the most relevant memories.
 2. **Persistence Gate**: use only memories that pass relevance, usefulness, risk, burden, and validity checks.
 
-The output now shows:
+### Real GitHub corpus demo
+
+Builds a small corpus from real GitHub repository metadata and README text, then compares ordinary top-k retrieval with Persistence Gate.
+
+It shows:
 
 - what ordinary top-k would have used
 - what Persistence Gate allowed
 - what Persistence Gate blocked
 - which blocked memories ordinary top-k would have used
-- how feedback changes memory state
+- a quick interpretation of whether the gate changed influence
 
 ## Package layout
 
@@ -57,10 +63,12 @@ src/persistence_memory/
   store.py         # in-memory store
   evaluation.py    # metrics
 examples/
-  github_real_data_demo.py
+  github_real_data_demo.py   # bundled sample corpus demo
+  github_corpus_demo.py      # real GitHub API corpus demo
   sample_corpus.jsonl
 tests/
   test_controller.py
+  test_github_corpus_demo.py
 ```
 
 ## Run in Google Colab
@@ -71,6 +79,19 @@ tests/
 !pip install -e ".[dev]"
 !pytest
 !python examples/github_real_data_demo.py --sample
+!python examples/github_corpus_demo.py
+```
+
+If you are re-running in the same Colab session:
+
+```python
+!rm -rf /content/persistence-gate
+%cd /content
+!git clone https://github.com/JayCamm/persistence-gate.git
+%cd persistence-gate
+!pip install -e ".[dev]"
+!pytest
+!python examples/github_corpus_demo.py
 ```
 
 ## Run locally
@@ -81,6 +102,16 @@ cd persistence-gate
 pip install -e ".[dev]"
 pytest
 python examples/github_real_data_demo.py --sample
+python examples/github_corpus_demo.py
+```
+
+## Optional: use a GitHub token
+
+The real GitHub corpus demo uses the public GitHub API. For higher rate limits, set a token first:
+
+```bash
+export GITHUB_TOKEN=your_token_here
+python examples/github_corpus_demo.py
 ```
 
 ## Design principle
