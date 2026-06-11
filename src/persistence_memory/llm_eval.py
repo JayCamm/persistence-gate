@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,6 +115,44 @@ def call_openai_chat(prompt: str, *, model: str = "gpt-4o-mini", temperature: fl
         ],
     )
     return response.choices[0].message.content or ""
+
+
+def call_gemini(prompt: str, *, model: str = "gemini-1.5-flash", temperature: float = 0.0) -> str:
+    """Call Gemini through Google's optional Gen AI SDK.
+
+    Set GEMINI_API_KEY or GOOGLE_API_KEY in the environment.
+    """
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Gemini requires GEMINI_API_KEY or GOOGLE_API_KEY")
+
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:  # pragma: no cover - optional dependency path
+        raise ImportError('Gemini support requires: pip install -e ".[gemini]"') from exc
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=temperature,
+            system_instruction="Answer strictly from the provided context. Do not invent missing facts.",
+        ),
+    )
+    return response.text or ""
+
+
+def call_llm_provider(prompt: str, *, provider: str, model: str | None = None, temperature: float = 0.0) -> str:
+    provider_normalized = provider.lower().strip()
+    if provider_normalized == "openai":
+        return call_openai_chat(prompt, model=model or "gpt-4o-mini", temperature=temperature)
+    if provider_normalized == "gemini":
+        return call_gemini(prompt, model=model or "gemini-1.5-flash", temperature=temperature)
+    if provider_normalized in {"offline", "deterministic"}:
+        return deterministic_llm_stand_in(prompt)
+    raise ValueError(f"Unsupported LLM_PROVIDER={provider!r}; use openai, gemini, or offline")
 
 
 def response_to_dict(summary: ResponseSafetySummary) -> dict[str, Any]:
