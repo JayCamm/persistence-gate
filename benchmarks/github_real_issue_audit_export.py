@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import asdict
+import sys
 from pathlib import Path
+
+# Allow this file to run both as:
+#   python benchmarks/github_real_issue_audit_export.py
+# and as:
+#   python -m benchmarks.github_real_issue_audit_export
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from persistence_memory import TaskContext
 from persistence_memory.audit import detect_circularity, shuffle_for_blind_review, stable_blind_id
