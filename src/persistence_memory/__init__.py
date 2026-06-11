@@ -6,7 +6,7 @@ then update memory state from feedback.
 """
 
 from .models import MemoryItem, MemoryState, TaskContext, GateDecision, FeedbackEvent
-from .controller import MemoryController
+from .controller import GateReport, MemoryController
 from .store import InMemoryStore
 from .scorer import PersistenceScorer
 
@@ -16,6 +16,7 @@ __all__ = [
     "TaskContext",
     "GateDecision",
     "FeedbackEvent",
+    "GateReport",
     "MemoryController",
     "InMemoryStore",
     "PersistenceScorer",
