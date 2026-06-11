@@ -4,6 +4,7 @@ from math import exp
 from time import time
 
 from .models import GateDecision, MemoryItem, MemoryState, ScoredMemory, TaskContext
+from .profiles import GateProfile, get_profile
 
 
 class PersistenceScorer:
@@ -14,19 +15,23 @@ class PersistenceScorer:
 
     def __init__(
         self,
-        allow_threshold: float = 0.28,
-        warning_threshold: float = 0.15,
-        quarantine_threshold: float = -0.10,
-        harm_weight: float = 0.55,
-        burden_weight: float = 0.35,
-        staleness_weight: float = 0.35,
+        allow_threshold: float | None = None,
+        warning_threshold: float | None = None,
+        quarantine_threshold: float | None = None,
+        harm_weight: float | None = None,
+        burden_weight: float | None = None,
+        staleness_weight: float | None = None,
+        risk_weight: float | None = None,
+        profile: str | GateProfile = "balanced",
     ) -> None:
-        self.allow_threshold = allow_threshold
-        self.warning_threshold = warning_threshold
-        self.quarantine_threshold = quarantine_threshold
-        self.harm_weight = harm_weight
-        self.burden_weight = burden_weight
-        self.staleness_weight = staleness_weight
+        self.profile = get_profile(profile)
+        self.allow_threshold = self.profile.allow_threshold if allow_threshold is None else allow_threshold
+        self.warning_threshold = self.profile.warning_threshold if warning_threshold is None else warning_threshold
+        self.quarantine_threshold = self.profile.quarantine_threshold if quarantine_threshold is None else quarantine_threshold
+        self.harm_weight = self.profile.harm_weight if harm_weight is None else harm_weight
+        self.burden_weight = self.profile.burden_weight if burden_weight is None else burden_weight
+        self.staleness_weight = self.profile.staleness_weight if staleness_weight is None else staleness_weight
+        self.risk_weight = self.profile.risk_weight if risk_weight is None else risk_weight
 
     def score(self, memory: MemoryItem, task: TaskContext, now: float | None = None) -> ScoredMemory:
         now = now or time()
@@ -51,7 +56,7 @@ class PersistenceScorer:
             + validated_bonus
             - self.harm_weight * harm
             - self.burden_weight * burden
-            - 0.28 * risk
+            - self.risk_weight * risk
         )
 
         # Abstention-aware adjustment. If task risk tolerance is low, memory must earn more influence.
@@ -65,6 +70,10 @@ class PersistenceScorer:
             reasons.append("high_harm_history")
         if burden > 0.5:
             reasons.append("high_burden")
+        if self.profile.high_risk_block_threshold is not None and risk >= self.profile.high_risk_block_threshold:
+            reasons.append("profile_high_risk_block")
+        if self.profile.high_harm_block_threshold is not None and harm >= self.profile.high_harm_block_threshold:
+            reasons.append("profile_high_harm_block")
         if memory.state == MemoryState.VALIDATED:
             reasons.append("validated")
 
@@ -83,6 +92,8 @@ class PersistenceScorer:
         if memory.state in {MemoryState.DELETED, MemoryState.ARCHIVED}:
             return GateDecision.IGNORE
         if memory.state == MemoryState.QUARANTINED:
+            return GateDecision.QUARANTINE
+        if "profile_high_risk_block" in reasons or "profile_high_harm_block" in reasons:
             return GateDecision.QUARANTINE
         if score >= self.allow_threshold:
             return GateDecision.ALLOW
