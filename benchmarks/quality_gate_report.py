@@ -26,6 +26,8 @@ def as_float(value: str, default: float = 0.0) -> float:
 
 
 def load_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
     with path.open("r", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
@@ -33,7 +35,7 @@ def load_rows(path: Path) -> list[dict]:
 def summarize_quality(rows: list[dict], min_pass_rate: float = 0.75, min_mean_gain: float = 1.0, min_label_conf: float = 0.65) -> QualityReport:
     total = len(rows)
     if total == 0:
-        return QualityReport(0, 0, 0.0, 0.0, 0.0, 0, 0, "FAIL_EMPTY")
+        return QualityReport(0, 0, 0.0, 0.0, 0.0, 0, 0, "FAIL_EMPTY_OR_MISSING")
 
     passed = sum(1 for row in rows if row.get("pass_fail") == "PASS")
     gains = [as_float(row.get("utility_gain", "0")) for row in rows]
@@ -72,6 +74,10 @@ def main() -> None:
 
     print("Benchmark Quality Gate")
     print("======================")
+    print(f"Input CSV: {args.summary_csv}")
+    if not rows:
+        print("No benchmark summary rows found. The benchmark probably did not complete, often because GitHub rate-limited comment fetches.")
+        print("Run a smaller benchmark or set GITHUB_TOKEN, then run this report again.")
     print(f"Cases: {report.total_cases}")
     print(f"Passed: {report.passed_cases}")
     print(f"Pass rate: {report.pass_rate:.1%}")
