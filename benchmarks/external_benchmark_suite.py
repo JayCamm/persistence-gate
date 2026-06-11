@@ -8,7 +8,6 @@ from pathlib import Path
 
 from persistence_memory import MemoryItem, TaskContext
 from persistence_memory.benchmark import evaluate_gate_vs_topk
-from persistence_memory.labeling import label_memory
 
 
 @dataclass
@@ -41,6 +40,7 @@ class CaseSummary:
     stale_prevented: int
     helpful_lost: int
     pass_fail: str
+    pass_reason: str
 
 
 def memory(
@@ -91,7 +91,7 @@ def clean_beir_style_cases() -> BenchmarkCase:
         query="What safe current information explains how Persistence Gate works?",
         items=items,
         top_k=5,
-        expected="gate_close_to_ordinary",
+        expected="gate_does_not_overblock",
     )
 
 
@@ -253,18 +253,31 @@ def all_cases() -> list[BenchmarkCase]:
     ]
 
 
+def pass_rule(case: BenchmarkCase, result) -> tuple[bool, str]:
+    """Return pass/fail and a concise explanation for the benchmark track."""
+    if case.expected == "gate_does_not_overblock":
+        # Clean controls should not require a win. They should prove the gate does
+        # not introduce risk or discard a meaningful amount of safe useful evidence.
+        if result.gated.risky_selected > 0:
+            return False, "clean_control_failed_added_risk"
+        if result.helpful_items_lost > 1:
+            return False, "clean_control_failed_overblocked_helpful_items"
+        if result.utility_gain < -0.75:
+            return False, "clean_control_failed_large_utility_loss"
+        return True, "clean_control_passed_no_overblocking"
+
+    if result.utility_gain > 0 and result.risky_items_prevented > 0 and result.stale_items_prevented >= 0:
+        return True, "gate_prevented_risky_or_stale_influence"
+    return False, "gate_did_not_outperform_on_risky_or_stale_track"
+
+
 def summarize_case(case: BenchmarkCase) -> CaseSummary:
     task = TaskContext(query=case.query, context_scope="project", need=0.95, risk_tolerance=0.40, abstention_score=0.04)
     result = evaluate_gate_vs_topk(case.items, task=task, top_k=case.top_k)
 
     ordinary_net = result.ordinary.net_utility()
     gated_net = result.gated.net_utility()
-    gain = result.utility_gain
-
-    if case.expected == "gate_close_to_ordinary":
-        passed = abs(gain) <= 0.75 and result.gated.risky_selected == 0 and result.helpful_items_lost <= 1
-    else:
-        passed = gain > 0 and result.risky_items_prevented > 0 and result.stale_items_prevented >= 0
+    passed, reason = pass_rule(case, result)
 
     return CaseSummary(
         track=case.track,
@@ -272,7 +285,7 @@ def summarize_case(case: BenchmarkCase) -> CaseSummary:
         expected=case.expected,
         ordinary_net=ordinary_net,
         gated_net=gated_net,
-        utility_gain=gain,
+        utility_gain=result.utility_gain,
         ordinary_helpful=result.ordinary.helpful_selected,
         gated_helpful=result.gated.helpful_selected,
         ordinary_risky=result.ordinary.risky_selected,
@@ -285,6 +298,7 @@ def summarize_case(case: BenchmarkCase) -> CaseSummary:
         stale_prevented=result.stale_items_prevented,
         helpful_lost=result.helpful_items_lost,
         pass_fail="PASS" if passed else "FAIL",
+        pass_reason=reason,
     )
 
 
@@ -311,7 +325,8 @@ def main() -> None:
         print(
             f"{summary.pass_fail} | {summary.track} | {summary.name} | "
             f"ordinary={summary.ordinary_net:.2f} gated={summary.gated_net:.2f} gain={summary.utility_gain:.2f} | "
-            f"risk_prevented={summary.risky_prevented} stale_prevented={summary.stale_prevented} helpful_lost={summary.helpful_lost}"
+            f"risk_prevented={summary.risky_prevented} stale_prevented={summary.stale_prevented} helpful_lost={summary.helpful_lost} | "
+            f"reason={summary.pass_reason}"
         )
 
     passed = sum(1 for summary in summaries if summary.pass_fail == "PASS")
