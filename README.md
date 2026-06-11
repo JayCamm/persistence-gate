@@ -1,4 +1,4 @@
-# Persistence-Aware Memory
+# Persistence Gate
 
 A prototype memory-control layer that sits between retrieval and downstream decision-making.
 
@@ -10,13 +10,42 @@ Core loop:
 retrieve -> score -> gate -> use -> feedback -> update
 ```
 
-This repository starts as a small Python package plus evaluation harness for testing persistence-aware retrieval against ordinary retrieval on real or semi-real corpora.
+## Plain English
+
+Normal retrieval systems do this:
+
+```text
+Find relevant information -> use it
+```
+
+Persistence Gate does this:
+
+```text
+Find relevant information -> check if it is safe/useful/current -> allow or block it -> learn from feedback
+```
+
+The project is a small Python software prototype for testing the idea that data should not be allowed to influence a system just because it is relevant.
 
 ## Current status
 
 Research prototype. Not production software yet.
 
 Supported claim so far: matched synthetic simulations show persistence-aware v2 beats ordinary retrieval on net utility by reducing harmful retrievals and burden while maintaining useful retrieval. The remaining design problem is abstention-aware retrieval: deciding when memory should not be used at all.
+
+## What the demo shows
+
+The demo compares:
+
+1. **Ordinary top-k retrieval**: use the most relevant memories.
+2. **Persistence Gate**: use only memories that pass relevance, usefulness, risk, burden, and validity checks.
+
+The output now shows:
+
+- what ordinary top-k would have used
+- what Persistence Gate allowed
+- what Persistence Gate blocked
+- which blocked memories ordinary top-k would have used
+- how feedback changes memory state
 
 ## Package layout
 
@@ -34,16 +63,23 @@ tests/
   test_controller.py
 ```
 
-## Install
+## Run in Google Colab
 
-```bash
-pip install -e .
-pytest
+```python
+!git clone https://github.com/JayCamm/persistence-gate.git
+%cd persistence-gate
+!pip install -e ".[dev]"
+!pytest
+!python examples/github_real_data_demo.py --sample
 ```
 
-## Quick demo
+## Run locally
 
 ```bash
+git clone https://github.com/JayCamm/persistence-gate.git
+cd persistence-gate
+pip install -e ".[dev]"
+pytest
 python examples/github_real_data_demo.py --sample
 ```
 
