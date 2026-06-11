@@ -13,13 +13,15 @@ class GateReport:
     """Full result of a persistence-gating pass.
 
     `allowed` is what downstream software may use.
-    `blocked` is everything rejected, quarantined, ignored, or marked refresh-required.
+    `blocked` is memory rejected by the gate.
+    `not_selected` passed the gate but did not fit into the top-k context budget.
     `ordinary_top_k` is the baseline: what a naive relevance-only retriever would have used.
     """
 
     allowed: list[ScoredMemory]
     blocked: list[ScoredMemory]
     ordinary_top_k: list[MemoryItem]
+    not_selected: list[ScoredMemory] | None = None
 
     @property
     def allowed_ids(self) -> list[str]:
@@ -28,6 +30,10 @@ class GateReport:
     @property
     def blocked_ids(self) -> list[str]:
         return [item.memory.id for item in self.blocked]
+
+    @property
+    def not_selected_ids(self) -> list[str]:
+        return [item.memory.id for item in (self.not_selected or [])]
 
     @property
     def ordinary_top_k_ids(self) -> list[str]:
@@ -61,8 +67,6 @@ class MemoryController:
     def evaluate_candidates(self, candidates: list[MemoryItem], task: TaskContext, top_k: int = 6) -> GateReport:
         """Score every candidate and return allowed, blocked, and ordinary baseline items."""
         # Capture the ordinary baseline before gating mutates any states.
-        # Otherwise a memory quarantined by the gate disappears from the baseline,
-        # which hides the exact thing we want to measure.
         ordinary = self.ordinary_top_k(candidates, top_k=top_k)
 
         scored = [self.scorer.score(candidate, task) for candidate in candidates if candidate.state != MemoryState.DELETED]
@@ -70,17 +74,21 @@ class MemoryController:
 
         allowed: list[ScoredMemory] = []
         blocked: list[ScoredMemory] = []
+        not_selected: list[ScoredMemory] = []
 
         for item in scored:
-            if item.decision in {GateDecision.ALLOW, GateDecision.ALLOW_WITH_WARNING} and len(allowed) < top_k:
-                allowed.append(item)
+            if item.decision in {GateDecision.ALLOW, GateDecision.ALLOW_WITH_WARNING}:
+                if len(allowed) < top_k:
+                    allowed.append(item)
+                else:
+                    not_selected.append(item)
             else:
                 blocked.append(item)
                 if item.decision == GateDecision.QUARANTINE:
                     item.memory.state = MemoryState.QUARANTINED
                     self.store.update(item.memory)
 
-        return GateReport(allowed=allowed, blocked=blocked, ordinary_top_k=ordinary)
+        return GateReport(allowed=allowed, blocked=blocked, ordinary_top_k=ordinary, not_selected=not_selected)
 
     def gate_candidates(self, candidates: list[MemoryItem], task: TaskContext, top_k: int = 6) -> list[ScoredMemory]:
         return self.evaluate_candidates(candidates, task, top_k=top_k).allowed
