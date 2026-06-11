@@ -9,6 +9,8 @@ from .models import MemoryItem, MemoryState, TaskContext, GateDecision, Feedback
 from .controller import GateReport, MemoryController
 from .store import InMemoryStore
 from .scorer import PersistenceScorer
+from .retriever import lexical_relevance, rank_by_relevance
+from .benchmark import BenchmarkResult, StrategyMetrics, evaluate_gate_vs_topk
 
 __all__ = [
     "MemoryItem",
@@ -20,4 +22,9 @@ __all__ = [
     "MemoryController",
     "InMemoryStore",
     "PersistenceScorer",
+    "lexical_relevance",
+    "rank_by_relevance",
+    "BenchmarkResult",
+    "StrategyMetrics",
+    "evaluate_gate_vs_topk",
 ]
