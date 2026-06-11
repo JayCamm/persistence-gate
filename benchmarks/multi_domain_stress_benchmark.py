@@ -36,12 +36,16 @@ DOMAIN_DIFFICULTY = {
     "operations_runbook": 1.00,
 }
 
+PASS_VERDICTS = {"PASS_IMPROVED", "PASS_CLEAN_NO_HARM", "PASS_NO_RISK_EXPOSURE"}
+FAIL_VERDICTS = {"FAIL_ALLOWED_RISK", "FAIL_LOST_HELPFUL", "FAIL_NET_HARM"}
+
 
 @dataclass
 class StressSummary:
     case_id: str
     domain: str
     scenario: str
+    profile: str
     ordinary_net: float
     gated_net: float
     utility_gain: float
@@ -53,6 +57,7 @@ class StressSummary:
     ordinary_stale: int
     gated_stale: int
     evidence_confidence_mean: float
+    verdict: str
     pass_fail: str
 
 
@@ -61,6 +66,7 @@ class GroupSummary:
     group: str
     cases: int
     passed: int
+    failed: int
     pass_rate: float
     mean_gain: float
     mean_confidence: float
@@ -263,21 +269,48 @@ def mean_confidence(memories: list[MemoryItem]) -> float:
     return sum(values) / max(1, len(values))
 
 
-def run_stress_case(name: str, query: str, memories: list[MemoryItem], top_k: int) -> StressSummary:
+def classify_verdict(scenario: str, utility_gain: float, ordinary_risky: int, ordinary_stale: int, gated_risky: int, gated_stale: int, helpful_lost: int) -> str:
+    exposure = ordinary_risky > 0 or ordinary_stale > 0
+    gate_allowed_bad = gated_risky > 0 or gated_stale > 0
+
+    if gate_allowed_bad:
+        return "FAIL_ALLOWED_RISK"
+    if helpful_lost > 0:
+        return "FAIL_LOST_HELPFUL"
+    if utility_gain < -0.25:
+        return "FAIL_NET_HARM"
+    if scenario == "clean_control":
+        return "PASS_CLEAN_NO_HARM"
+    if not exposure:
+        return "PASS_NO_RISK_EXPOSURE"
+    if utility_gain > 0:
+        return "PASS_IMPROVED"
+    return "WEAK_NO_GAIN"
+
+
+def run_stress_case(name: str, query: str, memories: list[MemoryItem], top_k: int, profile: str = "balanced") -> StressSummary:
     result = evaluate_gate_vs_topk(
         memories,
         TaskContext(query=query, context_scope="project", need=0.90, risk_tolerance=0.35, abstention_score=0.04),
         top_k=top_k,
+        profile=profile,
     )
     domain, scenario, _ = name.split(":", 2)
-    if scenario == "clean_control":
-        passed = result.gated.risky_selected == 0 and result.helpful_items_lost <= 0 and result.utility_gain >= -0.25
-    else:
-        passed = result.utility_gain > 0 and (result.risky_items_prevented > 0 or result.stale_items_prevented > 0)
+    verdict = classify_verdict(
+        scenario,
+        result.utility_gain,
+        result.ordinary.risky_selected,
+        result.ordinary.stale_selected,
+        result.gated.risky_selected,
+        result.gated.stale_selected,
+        result.helpful_items_lost,
+    )
+    pass_fail = "PASS" if verdict in PASS_VERDICTS else "FAIL" if verdict in FAIL_VERDICTS else "WEAK"
     return StressSummary(
         case_id=name,
         domain=domain,
         scenario=scenario,
+        profile=profile,
         ordinary_net=result.ordinary.net_utility(),
         gated_net=result.gated.net_utility(),
         utility_gain=result.utility_gain,
@@ -289,12 +322,14 @@ def run_stress_case(name: str, query: str, memories: list[MemoryItem], top_k: in
         ordinary_stale=result.ordinary.stale_selected,
         gated_stale=result.gated.stale_selected,
         evidence_confidence_mean=mean_confidence(memories),
-        pass_fail="PASS" if passed else "WEAK",
+        verdict=verdict,
+        pass_fail=pass_fail,
     )
 
 
 def summarize_group(group: str, rows: list[StressSummary]) -> GroupSummary:
     passed = sum(1 for row in rows if row.pass_fail == "PASS")
+    failed = sum(1 for row in rows if row.pass_fail == "FAIL")
     mean_gain = sum(row.utility_gain for row in rows) / max(1, len(rows))
     mean_conf = sum(row.evidence_confidence_mean for row in rows) / max(1, len(rows))
     nonpositive = sum(1 for row in rows if row.utility_gain <= 0)
@@ -302,6 +337,7 @@ def summarize_group(group: str, rows: list[StressSummary]) -> GroupSummary:
         group=group,
         cases=len(rows),
         passed=passed,
+        failed=failed,
         pass_rate=passed / max(1, len(rows)),
         mean_gain=mean_gain,
         mean_confidence=mean_conf,
@@ -331,6 +367,7 @@ def main() -> None:
     parser.add_argument("--cases-per-scenario", type=int, default=20)
     parser.add_argument("--top-k", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260611)
+    parser.add_argument("--profile", choices=["permissive", "balanced", "conservative"], default="balanced")
     parser.add_argument("--out", type=Path, default=Path("benchmark_results/multi_domain_stress_summary.csv"))
     parser.add_argument("--json", type=Path, default=Path("benchmark_results/multi_domain_stress_summary.json"))
     parser.add_argument("--group-out", type=Path, default=Path("benchmark_results/multi_domain_stress_group_summary.csv"))
@@ -344,9 +381,10 @@ def main() -> None:
             for _ in range(args.cases_per_scenario):
                 case_num += 1
                 name, query, memories = build_case(case_num, domain, scenario, rng)
-                rows.append(run_stress_case(name, query, memories, top_k=args.top_k))
+                rows.append(run_stress_case(name, query, memories, top_k=args.top_k, profile=args.profile))
 
     passed = sum(1 for row in rows if row.pass_fail == "PASS")
+    failed = sum(1 for row in rows if row.pass_fail == "FAIL")
     mean_gain = sum(row.utility_gain for row in rows) / len(rows)
     mean_conf = sum(row.evidence_confidence_mean for row in rows) / len(rows)
 
@@ -355,22 +393,30 @@ def main() -> None:
         group_rows.append(summarize_group(f"domain:{domain}", [row for row in rows if row.domain == domain]))
     for scenario in SCENARIOS:
         group_rows.append(summarize_group(f"scenario:{scenario}", [row for row in rows if row.scenario == scenario]))
+    verdict_counts = {verdict: sum(1 for row in rows if row.verdict == verdict) for verdict in sorted({row.verdict for row in rows})}
 
     print("Offline Multi-Domain Stress Benchmark")
     print("====================================")
+    print(f"Profile: {args.profile}")
     print(f"Cases: {len(rows)}")
     print(f"Passed: {passed}/{len(rows)}")
+    print(f"Failed: {failed}/{len(rows)}")
     print(f"Pass rate: {passed / len(rows):.1%}")
+    print(f"True failure rate: {failed / len(rows):.1%}")
     print(f"Mean utility gain: {mean_gain:.2f}")
     print(f"Mean evidence confidence: {mean_conf:.2f}")
 
+    print("\nBy verdict")
+    for verdict, count in verdict_counts.items():
+        print(f"{verdict}: {count}")
+
     print("\nBy domain")
     for row in [item for item in group_rows if item.group.startswith("domain:")]:
-        print(f"{row.group}: {row.passed}/{row.cases} pass, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
+        print(f"{row.group}: {row.passed}/{row.cases} pass, failed={row.failed}, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
 
     print("\nBy scenario")
     for row in [item for item in group_rows if item.group.startswith("scenario:")]:
-        print(f"{row.group}: {row.passed}/{row.cases} pass, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
+        print(f"{row.group}: {row.passed}/{row.cases} pass, failed={row.failed}, mean_gain={row.mean_gain:.2f}, nonpositive_gain={row.negative_or_zero_gain}")
 
     write_outputs(args.out, args.json, rows, group_rows, args.group_out)
     print(f"Saved CSV: {args.out}")
