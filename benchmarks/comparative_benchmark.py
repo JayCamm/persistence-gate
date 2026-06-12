@@ -14,6 +14,7 @@ from persistence_memory.llm_eval import build_rag_prompt, deterministic_llm_stan
 
 
 STALE_TEXT_RE = re.compile(r"\b(retired|deprecated|obsolete|superseded|old workaround|old incident|temporary)\b", re.I)
+DocumentLike = dict[str, Any] | Any
 
 
 @dataclass(frozen=True)
@@ -53,8 +54,18 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
-def document_id(document: dict[str, Any], index: int) -> str:
-    return str(document.get("id") or f"doc_{index}")
+def field(document: DocumentLike, name: str, default: Any = None) -> Any:
+    if isinstance(document, dict):
+        return document.get(name, default)
+    return getattr(document, name, default)
+
+
+def document_id(document: DocumentLike, index: int) -> str:
+    return str(field(document, "id", None) or f"doc_{index}")
+
+
+def document_text(document: DocumentLike) -> str:
+    return str(field(document, "text", ""))
 
 
 def expected_sets(case: dict[str, Any]) -> tuple[set[str], set[str]]:
@@ -71,17 +82,17 @@ def expected_sets(case: dict[str, Any]) -> tuple[set[str], set[str]]:
     return expected_allowed, expected_blocked
 
 
-def ordinary_top_k(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def ordinary_top_k(case: dict[str, Any], top_k: int) -> tuple[list[DocumentLike], list[DocumentLike]]:
     allowed = list(case["documents"][:top_k])
-    blocked: list[dict[str, Any]] = []
+    blocked: list[DocumentLike] = []
     return allowed, blocked
 
 
-def recency_filter(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    allowed: list[dict[str, Any]] = []
-    blocked: list[dict[str, Any]] = []
+def recency_filter(case: dict[str, Any], top_k: int) -> tuple[list[DocumentLike], list[DocumentLike]]:
+    allowed: list[DocumentLike] = []
+    blocked: list[DocumentLike] = []
     for document in case["documents"][:top_k]:
-        text = str(document.get("text", ""))
+        text = document_text(document)
         if document.get("label_stale") or STALE_TEXT_RE.search(text):
             blocked.append(document)
         else:
@@ -89,9 +100,9 @@ def recency_filter(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, Any
     return allowed, blocked
 
 
-def metadata_filter(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    allowed: list[dict[str, Any]] = []
-    blocked: list[dict[str, Any]] = []
+def metadata_filter(case: dict[str, Any], top_k: int) -> tuple[list[DocumentLike], list[DocumentLike]]:
+    allowed: list[DocumentLike] = []
+    blocked: list[DocumentLike] = []
     for document in case["documents"][:top_k]:
         risk = float(document.get("risk", 0.0))
         harm = float(document.get("harm_score", document.get("harm", 0.0)))
@@ -102,22 +113,22 @@ def metadata_filter(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, An
     return allowed, blocked
 
 
-def prompt_warning_only(case: dict[str, Any], top_k: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def prompt_warning_only(case: dict[str, Any], top_k: int) -> tuple[list[DocumentLike], list[DocumentLike]]:
     # Prompt-only methods do not remove evidence; they rely on the generator to handle conflicts.
     return ordinary_top_k(case, top_k)
 
 
-def persistence_gate(case: dict[str, Any], top_k: int, profile: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def persistence_gate(case: dict[str, Any], top_k: int, profile: str) -> tuple[list[DocumentLike], list[DocumentLike]]:
     gate = PersistenceGate(profile=profile, top_k=top_k)
     result = gate.filter(case["query"], case["documents"][:top_k])
-    return result.allowed_items, result.blocked_items
+    return list(result.allowed_items), list(result.blocked_items)
 
 
-def make_context(documents: list[dict[str, Any]]) -> str:
-    return "\n\n".join(str(document.get("text", "")) for document in documents)
+def make_context(documents: list[DocumentLike]) -> str:
+    return "\n\n".join(document_text(document) for document in documents)
 
 
-def answer_for_method(case: dict[str, Any], method: str, allowed_documents: list[dict[str, Any]]) -> str:
+def answer_for_method(case: dict[str, Any], method: str, allowed_documents: list[DocumentLike]) -> str:
     context = make_context(allowed_documents)
     if method == "prompt_warning_only":
         prompt = (
@@ -133,7 +144,7 @@ def answer_for_method(case: dict[str, Any], method: str, allowed_documents: list
 
 
 def run_case(case: dict[str, Any], method: str, top_k: int, profile: str = "balanced") -> MethodResult:
-    method_functions: dict[str, Callable[[dict[str, Any], int], tuple[list[dict[str, Any]], list[dict[str, Any]]]]] = {
+    method_functions: dict[str, Callable[[dict[str, Any], int], tuple[list[DocumentLike], list[DocumentLike]]]] = {
         "ordinary_top_k": ordinary_top_k,
         "recency_filter": recency_filter,
         "metadata_filter": metadata_filter,
