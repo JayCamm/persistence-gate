@@ -93,13 +93,13 @@ class PersistenceScorer:
             return GateDecision.IGNORE
         if memory.state == MemoryState.QUARANTINED:
             return GateDecision.QUARANTINE
-        if "profile_high_risk_block" in reasons or "profile_high_harm_block" in reasons:
+        if "profile_high_risk_block" in reasons or "profile_high_harm_block" in reasons or "high_harm_history" in reasons:
             return GateDecision.QUARANTINE
         if score >= self.allow_threshold:
             return GateDecision.ALLOW
         if score >= self.warning_threshold:
             return GateDecision.ALLOW_WITH_WARNING
-        if score <= self.quarantine_threshold or "high_harm_history" in reasons:
+        if score <= self.quarantine_threshold:
             return GateDecision.QUARANTINE
         if "stale_or_expired" in reasons:
             return GateDecision.REFRESH_REQUIRED
