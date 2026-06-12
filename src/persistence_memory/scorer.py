@@ -74,11 +74,26 @@ class PersistenceScorer:
             reasons.append("profile_high_risk_block")
         if self.profile.high_harm_block_threshold is not None and harm >= self.profile.high_harm_block_threshold:
             reasons.append("profile_high_harm_block")
+        if self._is_profile_gray_zone_block(harm=harm, risk=risk, usefulness=usefulness):
+            reasons.append("profile_gray_zone_block")
         if memory.state == MemoryState.VALIDATED:
             reasons.append("validated")
 
         decision = self._decision(score, memory, reasons)
         return ScoredMemory(memory=memory, score=score, decision=decision, reasons=reasons)
+
+    def _is_profile_gray_zone_block(self, harm: float, risk: float, usefulness: float) -> bool:
+        if (
+            self.profile.gray_zone_harm_threshold is None
+            or self.profile.gray_zone_risk_threshold is None
+            or self.profile.gray_zone_usefulness_ceiling is None
+        ):
+            return False
+        return (
+            harm >= self.profile.gray_zone_harm_threshold
+            and risk >= self.profile.gray_zone_risk_threshold
+            and usefulness <= self.profile.gray_zone_usefulness_ceiling
+        )
 
     def _validity(self, memory: MemoryItem, now: float) -> float:
         if memory.valid_until is None:
@@ -93,7 +108,12 @@ class PersistenceScorer:
             return GateDecision.IGNORE
         if memory.state == MemoryState.QUARANTINED:
             return GateDecision.QUARANTINE
-        if "profile_high_risk_block" in reasons or "profile_high_harm_block" in reasons or "high_harm_history" in reasons:
+        if (
+            "profile_high_risk_block" in reasons
+            or "profile_high_harm_block" in reasons
+            or "high_harm_history" in reasons
+            or "profile_gray_zone_block" in reasons
+        ):
             return GateDecision.QUARANTINE
         if score >= self.allow_threshold:
             return GateDecision.ALLOW
