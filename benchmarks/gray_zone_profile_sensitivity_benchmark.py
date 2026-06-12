@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,8 +58,12 @@ def main() -> None:
     all_case_rows = []
     profile_rows: list[ProfileSummary] = []
     for profile in profiles:
-        case_rows = [run_case(case, method="persistence_gate", top_k=args.top_k, profile=profile) for case in loaded_cases]
-        all_case_rows.extend(case_rows)
+        case_rows = [
+            run_case(case, method="persistence_gate", top_k=args.top_k, profile=profile)
+            for case in loaded_cases
+        ]
+        labeled_case_rows = [replace(row, method=f"persistence_gate:{profile}") for row in case_rows]
+        all_case_rows.extend(labeled_case_rows)
         summary = summarize_results(case_rows)[0]
         profile_rows.append(
             ProfileSummary(
