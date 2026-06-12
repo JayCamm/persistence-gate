@@ -30,3 +30,23 @@ def test_summary_groups_methods():
     ]
     summaries = summarize_results(rows)
     assert {summary.method for summary in summaries} == {"ordinary_top_k", "persistence_gate"}
+
+
+def test_comprehensive_cases_load_and_cover_many_domains():
+    cases = load_cases(Path("benchmark_data/comprehensive_comparative_cases.jsonl"))
+    assert len(cases) >= 20
+    assert len({case["domain"] for case in cases}) >= 8
+
+
+def test_comprehensive_benchmark_exposes_baseline_tradeoffs():
+    cases = load_cases(Path("benchmark_data/comprehensive_comparative_cases.jsonl"))
+    ordinary_rows = [run_case(case, method="ordinary_top_k", top_k=3, profile="balanced") for case in cases]
+    recency_rows = [run_case(case, method="recency_filter", top_k=3, profile="balanced") for case in cases]
+    metadata_rows = [run_case(case, method="metadata_filter", top_k=3, profile="balanced") for case in cases]
+    gate_rows = [run_case(case, method="persistence_gate", top_k=3, profile="balanced") for case in cases]
+
+    assert sum(row.false_allows for row in ordinary_rows) >= 10
+    assert sum(row.false_blocks for row in recency_rows) >= 5
+    assert sum(row.false_allows for row in metadata_rows) >= 10
+    assert sum(row.false_allows for row in gate_rows) == 0
+    assert sum(row.false_blocks for row in gate_rows) == 0
