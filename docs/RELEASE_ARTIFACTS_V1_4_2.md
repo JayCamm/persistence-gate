@@ -1,0 +1,14 @@
+# v1.4.2 Validation Artifacts and Checksums
+
+The connected GitHub integration cannot transfer the local ZIP binaries directly. The verified local artifacts are identified below for manual release attachment or archival upload.
+
+```text
+8f3cec2db0b70e1f7a43a6de7ebed5b4a0e20a7a3ef1086691c4a381fafa90fb  persistence_gate_benchmark_calibration_v0_1.zip
+73e503f7f102837919a38910241cf6105bb8fd1ee384fe018982adab79eff22b  persistence_gate_normalization_benchmark_v0_2.zip
+b67d0c246a15083dde397fe412e33f2ddef5f6c005ffbbe4e8dcefd908a4a91a  persistence_gate_real_document_validation_v0_3.zip
+a45f77701e2964d98379c287b5825825c7d80619ebd175cd8f29e50026067868  Constellation_Companion_v1_4_2_source.zip
+9a9698ad5c6d83443c7ec1df0805e77da623fa39ea070229daa7880239180990  Constellation_Microsoft_Agent_v0_2_2_Normalization_Hardening.zip
+67041d8d992e764d4ae8f716f9a7fcf7057e81b0bf99ec07a60446eadb8e02d  Berkley_Claim_Validation_v9_8_0_Azure_Hybrid_Pilot.zip
+```
+
+Do not treat the presence of a checksum as independent validation. It only identifies the exact tested archive.
